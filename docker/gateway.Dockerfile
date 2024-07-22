@@ -1,4 +1,4 @@
 FROM alpine:latest
 WORKDIR /root/
-COPY gateway .
+COPY build/gateway .
 CMD ["./gateway"]

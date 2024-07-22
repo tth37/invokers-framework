@@ -1,4 +1,4 @@
 FROM alpine:latest
 WORKDIR /root/
-COPY invoker .
+COPY build/invoker .
 CMD ["./invoker"]

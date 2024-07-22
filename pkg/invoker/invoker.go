@@ -11,6 +11,7 @@ import (
 
 	"log"
 
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -200,20 +201,9 @@ func (i *Invoker) waitForPodHealthy(clusterIP string, timeout time.Duration) err
 
 // createValidPodName generates a valid pod name from a prefix and function name
 func createValidPodName(prefix string, nodeName string, fn string) string {
-	// Remove any tags or digests from the image name
-	name := strings.Replace(fn, ":", "-", -1)
-	name = strings.Split(name, "@")[0]
-
-	// Replace invalid characters with dashes
-	name = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(name))
-
-	// Ensure the name starts and ends with an alphanumeric character
-	name = strings.Trim(name, "-")
+	// Hash fn to get a unique 6-character name
+	hash := uuid.NewSHA1(uuid.NameSpaceDNS, []byte(fn)).String()
+	name := hash[:6]
 
 	// Combine prefix and name
 	fullName := fmt.Sprintf("%s-%s-%s", prefix, nodeName, name)
@@ -255,7 +245,7 @@ func (i *Invoker) prewarm(fn string) (string, error) {
 	// Create a Pod to prewarm the function
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: podName,
+			Name: podName + "-" + uuid.New().String()[0:5],
 			Labels: map[string]string{
 				"function": podName,
 				"prewarm":  "true",
@@ -300,7 +290,7 @@ func (i *Invoker) prewarm(fn string) (string, error) {
 	// Create a Service for the pod
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: serviceName,
+			Name: serviceName + "-" + uuid.New().String()[0:5],
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -341,7 +331,7 @@ func (i *Invoker) prewarm(fn string) (string, error) {
 	// log.Printf("[Timer] Wait for pod: %v", time.Since(startAt))
 
 	// Wait for the Service to get a ClusterIP
-	ip, err := i.waitForService(createdService.Name, 1*time.Minute)
+	ip, err := i.waitForService(createdService.Name, 10*time.Second)
 	if err != nil {
 		// Clean up resources if service fails to get ClusterIP
 		_ = i.client.CoreV1().Services(i.namespace).Delete(context.TODO(), serviceName, metav1.DeleteOptions{})
@@ -371,25 +361,61 @@ func (i *Invoker) prewarm(fn string) (string, error) {
 func (i *Invoker) cleanPrewarmResources(fn string) {
 	baseName := createValidPodName("prewarm", i.nodeName, fn)
 	podName := baseName + "-pod"
-	serviceName := baseName + "-svc"
 
-	_ = i.client.CoreV1().Services(i.namespace).Delete(context.TODO(), serviceName, metav1.DeleteOptions{})
-	for {
-		_, err := i.client.CoreV1().Services(i.namespace).Get(context.TODO(), serviceName, metav1.GetOptions{})
-		if err != nil {
-			break
-		}
-		time.Sleep(1 * time.Second)
+	labelSelector := fmt.Sprintf("function=%s,prewarm=true", podName)
+
+	// List all pods with the specified label
+	pods, err := i.client.CoreV1().Pods(i.namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+
+	if err != nil {
+		log.Printf("Failed to list pods: %v", err)
+		return
 	}
 
-	_ = i.client.CoreV1().Pods(i.namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
-	for {
-		_, err := i.client.CoreV1().Pods(i.namespace).Get(context.TODO(), podName, metav1.GetOptions{})
-		if err != nil {
-			break
+	// Delete all pods with the specified label
+	for _, pod := range pods.Items {
+		log.Printf("Deleting pod %s", pod.Name)
+		// go func(podName string) {
+		// 	_ = i.client.CoreV1().Pods(i.namespace).Delete(context.TODO(), podName, metav1.DeleteOptions{})
+		// }(pod.Name)
+		_ = i.client.CoreV1().Pods(i.namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
+		for {
+			_, err := i.client.CoreV1().Pods(i.namespace).Get(context.TODO(), pod.Name, metav1.GetOptions{})
+			if err != nil {
+				break
+			}
+			time.Sleep(1 * time.Second)
 		}
-		time.Sleep(1 * time.Second)
 	}
+
+	// List all services with the specified label
+	services, err := i.client.CoreV1().Services(i.namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+
+	if err != nil {
+		log.Printf("Failed to list services: %v", err)
+		return
+	}
+
+	// Delete all services with the specified label
+	for _, service := range services.Items {
+		log.Printf("Deleting service %s", service.Name)
+		// go func(serviceName string) {
+		// 	_ = i.client.CoreV1().Services(i.namespace).Delete(context.TODO(), serviceName, metav1.DeleteOptions{})
+		// }(service.Name)
+		_ = i.client.CoreV1().Services(i.namespace).Delete(context.TODO(), service.Name, metav1.DeleteOptions{})
+		for {
+			_, err := i.client.CoreV1().Services(i.namespace).Get(context.TODO(), service.Name, metav1.GetOptions{})
+			if err != nil {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 }
 
 func (i *Invoker) waitForService(serviceName string, timeout time.Duration) (string, error) {

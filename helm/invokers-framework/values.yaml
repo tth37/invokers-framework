@@ -1,0 +1,36 @@
+# Custom configurations
+dockerMirror: docker.tth37.xyz
+dockerRegistry: docker-registry.tth37.xyz
+
+# Images
+kubectlImage: bitnami/kubectl:latest
+invokerImage: invoker:latest
+gatewayImage: gateway:latest
+
+# ServiceAccount
+serviceAccount:
+  name: invokers-sa
+
+# Role
+role:
+  name: invokers-role
+
+# RoleBinding
+roleBinding:
+  name: invokers-role-binding
+
+# DaemonSet
+daemonSet:
+  name: invoker
+
+# Deployment
+deployment:
+  name: gateway
+  replicas: 1
+
+# Service
+service:
+  name: gateway-service
+  type: LoadBalancer
+  port: 8080
+  targetPort: 8080
